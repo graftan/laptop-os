@@ -1,0 +1,143 @@
+---
+# Builds the image, pushes it to GHCR and signs it with cosign.
+# Adapted from ublue-os/image-template (Apache-2.0); action versions are pinned by commit.
+name: Build image
+
+on:
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "17 5 * * *" # daily 05:17 UTC: picks up Zirconium and Fedora updates
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+  workflow_dispatch:
+
+env:
+  DEFAULT_TAG: latest
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_push:
+    name: Build, push and sign
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      # Pull requests build and lint only; publishing happens from the default branch.
+      PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Maximize build space
+        uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+
+      - name: Prepare environment
+        run: |
+          # GHCR paths must be lowercase
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          name="${GITHUB_REPOSITORY#*/}"
+          {
+            echo "IMAGE_REGISTRY=ghcr.io/${owner}"
+            echo "IMAGE_NAME=${name,,}"
+            echo "DATE_TAG=$(date -u +%Y%m%d)"
+            echo "SHORT_SHA=${GITHUB_SHA::7}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Check signing setup
+        if: env.PUBLISH == 'true'
+        env:
+          SIGNING_SECRET: ${{ secrets.SIGNING_SECRET }}
+        run: |
+          if [[ -z "${SIGNING_SECRET}" ]]; then
+            echo "::error::Repository secret SIGNING_SECRET is not set (README, step 2)"
+            exit 1
+          fi
+          if ! grep -q 'BEGIN PUBLIC KEY' cosign.pub; then
+            echo "::error::cosign.pub is still the placeholder (README, step 2)"
+            exit 1
+          fi
+
+      - name: Build image
+        run: |
+          set -euo pipefail
+          podman build \
+            --pull=newer \
+            --build-arg IMAGE_REGISTRY="${IMAGE_REGISTRY}" \
+            --build-arg IMAGE_NAME="${IMAGE_NAME}" \
+            --label org.opencontainers.image.title="${IMAGE_NAME}" \
+            --label org.opencontainers.image.description="Personal bootc image: Zirconium (niri + DMS) with NVIDIA" \
+            --label org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY}" \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            --label org.opencontainers.image.version="${DEFAULT_TAG}.${DATE_TAG}" \
+            --label org.opencontainers.image.created="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --tag "${IMAGE_NAME}:${DEFAULT_TAG}" \
+            --file Containerfile \
+            .
+          for tag in "${DATE_TAG}" "${DEFAULT_TAG}-${DATE_TAG}" "${SHORT_SHA}"; do
+            podman tag "${IMAGE_NAME}:${DEFAULT_TAG}" "${IMAGE_NAME}:${tag}"
+          done
+          podman images
+
+      - name: Login to GitHub Container Registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GHCR
+        if: env.PUBLISH == 'true'
+        id: push
+        run: |
+          set -euo pipefail
+          for tag in "${DEFAULT_TAG}" "${DATE_TAG}" "${DEFAULT_TAG}-${DATE_TAG}" "${SHORT_SHA}"; do
+            podman push --digestfile=/tmp/digestfile "${IMAGE_NAME}:${tag}" "${IMAGE_REGISTRY}/${IMAGE_NAME}:${tag}"
+          done
+          echo "digest=$(< /tmp/digestfile)" >> "${GITHUB_OUTPUT}"
+
+      - name: Install cosign
+        if: env.PUBLISH == 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.2" # be careful when upgrading major versions
+
+      - name: Sign image
+        if: env.PUBLISH == 'true'
+        env:
+          COSIGN_EXPERIMENTAL: false
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          # Old bundle format: what bootc/containers-image verify today
+          # (containers/container-libs#388, coreos/rpm-ostree#5509)
+          cosign sign -y --new-bundle-format=false --use-signing-config=false \
+            --key env://COSIGN_PRIVATE_KEY "${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+
+      - name: Summary
+        if: env.PUBLISH == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### Published ${IMAGE_REGISTRY}/${IMAGE_NAME}"
+            echo ""
+            echo "Tags: \`${DEFAULT_TAG}\`, \`${DATE_TAG}\`, \`${DEFAULT_TAG}-${DATE_TAG}\`, \`${SHORT_SHA}\`  "
+            echo "Digest: \`${DIGEST}\`"
+            echo ""
+            echo "\`\`\`bash"
+            echo "sudo bootc switch --enforce-container-sigpolicy ${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}"
+            echo "\`\`\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

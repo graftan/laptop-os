@@ -1,0 +1,7 @@
+# Signing private key: lives only in the SIGNING_SECRET repo secret (and your vault)
+cosign.key
+*.key
+
+# Local build leftovers
+output/
+_build*/

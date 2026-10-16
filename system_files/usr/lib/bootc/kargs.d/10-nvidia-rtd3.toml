@@ -1,0 +1,5 @@
+# Let the NVIDIA dGPU power down when idle (PCIe runtime D3).
+# Ampere and newer laptops get this by default; Turing (GTX 16xx) needs it set explicitly.
+# bootc applies kargs.d changes on the next switch/upgrade; delete this file to drop it.
+kargs = ["nvidia.NVreg_DynamicPowerManagement=0x02"]
+match-architectures = ["x86_64"]
