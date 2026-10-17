@@ -15,15 +15,25 @@ FEDORA_VERSION="$(rpm -E %fedora)"
 REPOS_D=/etc/yum.repos.d
 mkdir -p "${REPOS_D}"
 
-### 1. Static files: kernel args and udev rules for NVIDIA runtime power management
+### 1. Static files: NVIDIA runtime power management (kargs + udev) and the
+###    Claude Code host policy (/etc/claude-code/managed-settings.json)
 cp -avf /ctx/system_files/. /
 
 ### 2. Packages from Fedora
 # Zirconium already ships tailscale, podman, distrobox, chezmoi, just, gcc, brew,
 # nvidia-container-toolkit and nvctk-cdi.service. Only add what is missing.
+#   gh            GitHub CLI; git's HTTPS credential helper, so it needs a stable path
+#   podman-docker `docker` command backed by rootless podman (devcontainer tooling expects it)
+#   bubblewrap, socat  Claude Code's Linux sandbox (normally present already; listed to be sure)
 "${DNF}" -y install \
+    gh \
+    podman-docker \
+    bubblewrap \
+    socat \
     nvtop \
     powertop
+# Silence podman-docker's "Emulate Docker CLI using podman" banner
+touch /etc/containers/nodocker
 
 ### 3. Packages from third-party repos, enabled for this build only
 # mise (per-user tool manager): COPR jdxcode/mise
@@ -96,6 +106,7 @@ fi
 
 ### 6. Sanity checks: fail here rather than ship a broken image
 jq -e --arg repo "${IMAGE_REGISTRY}/${IMAGE_NAME}" '.transports.docker[$repo]' "${POLICY}" > /dev/null
-for bin in mise claude tailscale nvidia-smi nvidia-ctk nvtop powertop; do
+jq -e '.sandbox.enabled == true' /etc/claude-code/managed-settings.json > /dev/null
+for bin in mise claude gh docker bwrap socat tailscale nvidia-smi nvidia-ctk nvtop powertop; do
     command -v "${bin}" > /dev/null || { echo "missing ${bin}" >&2; exit 1; }
 done

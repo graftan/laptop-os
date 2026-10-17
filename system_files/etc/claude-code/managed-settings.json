@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Read(~/.ssh/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.kube/**)",
+      "Read(~/.talos/**)",
+      "Read(~/.config/sops/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.config/chezmoi/**)",
+      "Read(~/.config/Bitwarden CLI/**)",
+      "Read(~/.local/share/keyrings/**)",
+      "Read(~/.local/share/atuin/**)",
+      "Read(~/.var/app/**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "denyRead": [
+        "~/.ssh",
+        "~/.gnupg",
+        "~/.kube",
+        "~/.talos",
+        "~/.config/sops",
+        "~/.config/gh",
+        "~/.config/chezmoi",
+        "~/.config/Bitwarden CLI",
+        "~/.local/share/keyrings",
+        "~/.local/share/atuin",
+        "~/.var/app"
+      ]
+    },
+    "credentials": {
+      "envVars": [
+        { "name": "GH_TOKEN", "mode": "deny" },
+        { "name": "GITHUB_TOKEN", "mode": "deny" },
+        { "name": "BW_SESSION", "mode": "deny" }
+      ]
+    }
+  }
+}
