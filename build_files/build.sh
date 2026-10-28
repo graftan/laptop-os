@@ -77,16 +77,23 @@ fi
 KEY_PATH="/usr/share/pki/containers/${IMAGE_NAME}.pub"
 install -Dm0644 /ctx/cosign.pub "${KEY_PATH}"
 
-# Zirconium keeps the real policy in /usr/share/factory and symlinks /etc/containers/*
-# to it at boot (tmpfiles "L+"), so edit the factory copy. Plain Fedora bases use /etc.
-FACTORY=/usr/share/factory/etc/containers
-if [[ -f "${FACTORY}/policy.json" ]]; then
-    POLICY="${FACTORY}/policy.json"
-    REGISTRIES_D="${FACTORY}/registries.d"
-else
-    POLICY=/etc/containers/policy.json
-    REGISTRIES_D=/etc/containers/registries.d
+# Find where the base image keeps the containers signing policy:
+#  - Zirconium on Fedora 45+: /usr/share/containers (read natively, no /etc copy)
+#  - older Zirconium: /usr/share/factory/etc/containers, symlinked into /etc by tmpfiles
+#  - plain Fedora bases: /etc/containers
+POLICY=""
+for dir in /usr/share/containers /usr/share/factory/etc/containers /etc/containers; do
+    if [[ -f "${dir}/policy.json" ]]; then
+        POLICY="${dir}/policy.json"
+        REGISTRIES_D="${dir}/registries.d"
+        break
+    fi
+done
+if [[ -z "${POLICY}" ]]; then
+    echo "No containers policy.json found in the base image" >&2
+    exit 1
 fi
+FACTORY=/usr/share/factory/etc/containers
 
 jq --arg repo "${IMAGE_REGISTRY}/${IMAGE_NAME}" --arg key "${KEY_PATH}" \
     '.transports.docker[$repo] = [{"type": "sigstoreSigned", "keyPath": $key, "signedIdentity": {"type": "matchRepository"}}]' \
